@@ -139,4 +139,6 @@ nbproject/
 .vscode/
 
 *.db
+*.db-shm
+*.db-wal
 keys/
