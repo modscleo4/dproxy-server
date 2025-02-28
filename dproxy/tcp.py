@@ -174,38 +174,41 @@ class DProxyTCPServer(ThreadingTCPServer):
 
     @override
     def service_actions(self) -> None:
-        if self.stop_event.is_set():
-            logger.info("Closing TCP server...")
-            for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
-                sock.close()
-
-            DProxyConnectionWrapper.clients.clear()
-            DProxyConnectionWrapper.last_connection_id.clear()
-            self.server_close()
-
-            return
-
-        self.ticks += 1
-
-        if self.ticks % 10 == 0:
-            self.ticks = 0
-            to_delete: list[str] = []
-            for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
-                try:
-                    # Send a heartbeat packet to the client
-                    select([], [sock], [])
-                    sock.send(DProxyHeartbeat(1, DProxyPacketType.HEARTBEAT, 8, DProxyError.NO_ERROR, round(time() * 1000)).to_bytes())
-                except ConnectionError:
+        try:
+            if self.stop_event.is_set():
+                logger.info("Closing TCP server...")
+                for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
                     sock.close()
-                    to_delete.append(username)
-                except Exception as ex:
-                    logger.exception("An error occurred while sending the heartbeat packet", exc_info=ex)
-                    sock.close()
-                    to_delete.append(username)
 
-            for username in to_delete:
-                del DProxyConnectionWrapper.clients[username]
-                del DProxyConnectionWrapper.last_connection_id[username]
+                DProxyConnectionWrapper.clients.clear()
+                DProxyConnectionWrapper.last_connection_id.clear()
+                self.server_close()
+
+                return
+
+            self.ticks += 1
+
+            if self.ticks % 10 == 0:
+                self.ticks = 0
+                to_delete: list[str] = []
+                for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
+                    try:
+                        # Send a heartbeat packet to the client
+                        select([], [sock], [])
+                        sock.send(DProxyHeartbeat(1, DProxyPacketType.HEARTBEAT, 8, DProxyError.NO_ERROR, round(time() * 1000)).to_bytes())
+                    except ConnectionError:
+                        sock.close()
+                        to_delete.append(username)
+                    except Exception as ex:
+                        logger.exception("An error occurred while sending the heartbeat packet", exc_info=ex)
+                        sock.close()
+                        to_delete.append(username)
+
+                for username in to_delete:
+                    del DProxyConnectionWrapper.clients[username]
+                    del DProxyConnectionWrapper.last_connection_id[username]
+        except Exception as ex:
+            logger.exception("An unexpected error occurred", exc_info=ex)
 
 
 class TCPHandler(BaseRequestHandler):
@@ -224,29 +227,32 @@ class TCPHandler(BaseRequestHandler):
 
     @override
     def handle(self) -> None:
-        logger.debug(f"Connection from {self.client_address}")
+        try:
+            logger.debug(f"Connection from {self.client_address}")
 
-        data = self.receive_data(5)
-        if not data:
-            return
+            data = self.receive_data(5)
+            if not data:
+                return
 
-        ok, response = self.process_handshake_init(data)
-        self.send_packet(response)
-        if not ok:
-            return
+            ok, response = self.process_handshake_init(data)
+            self.send_packet(response)
+            if not ok:
+                return
 
-        data = self.receive_data(5)
-        if not data:
-            return
+            data = self.receive_data(5)
+            if not data:
+                return
 
-        ok, response = self.process_handshake_finalization(data)
-        self.send_packet(response)
-        if not ok:
-            return
+            ok, response = self.process_handshake_finalization(data)
+            self.send_packet(response)
+            if not ok:
+                return
 
-        # Add the connection to the server connections map
-        DProxyConnectionWrapper.clients[self.username] = (self.request, self.cek, {}, {})
-        self.run_loop()
+            # Add the connection to the server connections map
+            DProxyConnectionWrapper.clients[self.username] = (self.request, self.cek, {}, {})
+            self.run_loop()
+        except Exception as ex:
+            logger.exception("An unexpected error occurred", exc_info=ex)
 
     def receive_data(self, max_length: int) -> bytes | None:
         """Receive data from the client with a maximum length."""
