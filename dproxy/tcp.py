@@ -14,6 +14,7 @@
 
 
 from asyncio import Semaphore, wait_for
+from collections.abc import Callable
 import logging
 import os
 from queue import Queue
@@ -22,7 +23,7 @@ from socket import socket
 from socketserver import ThreadingTCPServer, BaseRequestHandler
 from time import time
 from threading import Event
-from typing import Callable, Any, override, Self
+from typing import Any, override, Self
 
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization

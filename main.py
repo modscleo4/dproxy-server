@@ -82,6 +82,9 @@ async def proxy_handler(request: Request, call_next):
                 async def _https_return(_scope: dict, _receive: Receive, _send: Send):
                     cycle: RequestResponseCycle = _scope['RequestResponseCycle']
 
+                    if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+                        return
+
                     # Switching protocols...
                     cycle.response_started = True
                     cycle.conn.send(h11.Response(status_code=200, headers=[], reason="Connection established", http_version=request.scope['http_version']))
@@ -130,11 +133,13 @@ async def proxy_handler(request: Request, call_next):
                     await _receive()
                     while (data := await conn.read(30)):
                         logger.debug(f"Received data from packet: {len(data)}.")
-                        if not cycle.response_started:
-                            cycle.response_started = True
-                            status_line, _ = data.split(b"\r\n", 1)
-                            version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
-                            cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
+                        if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+                            break
+
+                        cycle.response_started = True
+                        status_line, _ = data.split(b"\r\n", 1)
+                        version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
+                        cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
 
                         cycle.transport.write(data)
                 except TimeoutError:
