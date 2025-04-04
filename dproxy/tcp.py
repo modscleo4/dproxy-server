@@ -178,11 +178,15 @@ class DProxyTCPServer(ThreadingTCPServer):
         try:
             if self.stop_event.is_set():
                 logger.info("Closing TCP server...")
-                for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
-                    sock.close()
+                try:
+                    for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
+                        sock.close()
 
-                DProxyConnectionWrapper.clients.clear()
-                DProxyConnectionWrapper.last_connection_id.clear()
+                    DProxyConnectionWrapper.clients.clear()
+                    DProxyConnectionWrapper.last_connection_id.clear()
+                except Exception as ex:
+                    logger.exception("An error occurred while closing the TCP server", exc_info=ex)
+
                 self.server_close()
 
                 return
@@ -253,7 +257,7 @@ class TCPHandler(BaseRequestHandler):
             DProxyConnectionWrapper.clients[self.username] = (self.request, self.cek, {}, {})
             self.run_loop()
         except Exception as ex:
-            logger.exception("An unexpected error occurred", exc_info=ex)
+            logger.exception("An unexpected error occurred while handling the connection", exc_info=ex)
 
     def receive_data(self, max_length: int) -> bytes | None:
         """Receive data from the client with a maximum length."""

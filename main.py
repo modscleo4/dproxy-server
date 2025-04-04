@@ -108,6 +108,10 @@ async def proxy_handler(request: Request, call_next):
                     cycle.response_complete = True
                     cycle.transport.close()
 
+                if request.scope['http_version'] != "1.1":
+                    logger.debug(f"Invalid HTTP version: {request.scope['http_version']}")
+                    return Response(status_code=505, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
+
                 return _https_return
 
         # Client is authenticated, send the request to the queue and wait for the response
