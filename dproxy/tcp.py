@@ -89,8 +89,17 @@ class DProxyConnectionWrapper:
         for chunk in [data[i:i + 32768] for i in range(0, len(data), 32768)]:
             iv = os.urandom(12)
             ciphertext, auth_tag = aes_gcm_encrypt(cek, iv, chunk)
-            select([], [sock], [])
-            sock.send(DProxyData(1, DProxyPacketType.DATA, len(iv) + 2 + len(ciphertext) + len(auth_tag), DProxyError.NO_ERROR, self.connection_id, iv, ciphertext, auth_tag).to_bytes())
+
+            for attempt in range(5):
+                try:
+                    select([], [sock], [])
+                    sock.send(DProxyData(1, DProxyPacketType.DATA, len(iv) + 2 + len(ciphertext) + len(auth_tag), DProxyError.NO_ERROR, self.connection_id, iv, ciphertext, auth_tag).to_bytes())
+                    break
+                except Exception as ex:
+                    if attempt == 4:
+                        raise ex
+
+                    logger.exception("An error occurred while trying to send data to the client.", exc_info=ex)
 
     def close(self) -> None:
         if self.username not in DProxyConnectionWrapper.clients:
