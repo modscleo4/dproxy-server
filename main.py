@@ -45,6 +45,68 @@ app = CustomFastAPI()
 app.include_router(router)
 
 
+async def _https_return(_scope: dict, _receive: Receive, _send: Send):
+    conn: DProxyConnectionWrapper = _scope['conn']
+    cycle: RequestResponseCycle = _scope['RequestResponseCycle']
+    if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+        return
+
+    # Switching protocols...
+    cycle.response_started = True
+    cycle.conn.send(h11.Response(status_code=200, headers=[], reason="Connection established", http_version=_scope['http_version']))
+    cycle.transport.write(f"HTTP/{_scope['http_version']} 200 Connection established\r\n\r\n".encode('iso-8859-1'))
+    h11_proto: H11Protocol = cycle.transport.get_protocol()  # type: ignore
+    h11_proto.connections.discard(h11_proto)
+    cycle.transport.set_protocol(ProxyHTTPSProtocol(logger, conn, cycle.transport))
+
+    await _receive()
+    while conn.is_alive():
+        try:
+            while data := await conn.read(0.01):
+                logger.debug(f"Received data from packet: {len(data)}.")
+                cycle.transport.write(data)
+        except TimeoutError:
+            pass
+        except ValueError:
+            logger.debug(f"Client {conn.username} disconnected.")
+            break
+        except ConnectionError:
+            logger.debug(f"Connection {conn.connection_id} closed.")
+            break
+
+    cycle.response_complete = True
+    cycle.transport.close()
+
+
+async def _http_return(_scope: dict, _receive: Receive, _send: Send):
+    conn: DProxyConnectionWrapper = _scope['conn']
+    cycle: RequestResponseCycle = _scope['RequestResponseCycle']
+
+    try:
+        await _receive()
+        while data := await conn.read(30):
+            logger.debug(f"Received data from packet: {len(data)}.")
+            if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+                break
+
+            cycle.response_started = True
+            status_line, _ = data.split(b"\r\n", 1)
+            version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
+            cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
+
+            cycle.transport.write(data)
+    except TimeoutError:
+        logger.debug(f"Connection {conn.connection_id} timed out.")
+    except ConnectionError:
+        pass
+
+    if conn.is_alive():
+        conn.close()
+
+    if cycle.response_started:
+        await _send({"type": "http.response.body", "body": b"", "more_body": False})
+
+
 @app.middleware("http")
 async def proxy_handler(request: Request, call_next):
     if any(request.scope['path'].startswith(scheme) for scheme in ["http://", "ws://"]) or request.method == "CONNECT":
@@ -79,38 +141,11 @@ async def proxy_handler(request: Request, call_next):
                 except TimeoutError:
                     return Response(status_code=504, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
 
-                async def _https_return(_scope: dict, _receive: Receive, _send: Send):
-                    cycle: RequestResponseCycle = _scope['RequestResponseCycle']
-
-                    if cycle.response_started or cycle.conn.our_state == h11.ERROR:
-                        return
-
-                    # Switching protocols...
-                    cycle.response_started = True
-                    cycle.conn.send(h11.Response(status_code=200, headers=[], reason="Connection established", http_version=request.scope['http_version']))
-                    cycle.transport.write(f"HTTP/{request.scope['http_version']} 200 Connection established\r\n\r\n".encode('iso-8859-1'))
-                    h11_proto: H11Protocol = cycle.transport.get_protocol() # type: ignore
-                    h11_proto.connections.discard(h11_proto)
-                    cycle.transport.set_protocol(ProxyHTTPSProtocol(logger, conn, cycle.transport))
-
-                    await _receive()
-                    while conn.is_alive():
-                        try:
-                            while (data := await conn.read(0.1)):
-                                logger.debug(f"Received data from packet: {len(data)}.")
-                                cycle.transport.write(data)
-                        except TimeoutError:
-                            pass
-                        except ConnectionError:
-                            logger.debug(f"Connection {conn.connection_id} closed.")
-                            break
-
-                    cycle.response_complete = True
-                    cycle.transport.close()
-
                 if request.scope['http_version'] != "1.1":
                     logger.debug(f"Invalid HTTP version: {request.scope['http_version']}")
                     return Response(status_code=505, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
+
+                request.scope['conn'] = conn
 
                 return _https_return
 
@@ -130,34 +165,9 @@ async def proxy_handler(request: Request, call_next):
             except TimeoutError:
                 return Response(status_code=504, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
 
-            async def _return(_scope: dict, _receive: Receive, _send: Send):
-                cycle: RequestResponseCycle = _scope['RequestResponseCycle']
+            request.scope['conn'] = conn
 
-                try:
-                    await _receive()
-                    while (data := await conn.read(30)):
-                        logger.debug(f"Received data from packet: {len(data)}.")
-                        if cycle.response_started or cycle.conn.our_state == h11.ERROR:
-                            break
-
-                        cycle.response_started = True
-                        status_line, _ = data.split(b"\r\n", 1)
-                        version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
-                        cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
-
-                        cycle.transport.write(data)
-                except TimeoutError:
-                    logger.debug(f"Connection {conn.connection_id} timed out.")
-                except ConnectionError:
-                    pass
-
-                if conn.is_alive():
-                    conn.close()
-
-                if cycle.response_started:
-                    await _send({"type": "http.response.body", "body": b"", "more_body": False})
-
-            return _return
+            return _http_return
 
     return await call_next(request)
 
