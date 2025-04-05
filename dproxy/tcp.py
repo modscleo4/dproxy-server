@@ -309,7 +309,13 @@ class TCPHandler(BaseRequestHandler):
         self.username = username
         if username in DProxyConnectionWrapper.clients:
             # return False, DProxyErrorPacket(1, DProxyPacketType.ERROR, 0, DProxyError.ALREADY_AUTHENTICATED, 0, "")
-            pass
+            sock, _, recv, conn_event = DProxyConnectionWrapper.clients[username]
+            try:
+                sock.close()
+                for _, (sem, _) in recv.items():
+                    sem.release()
+            except Exception as ex:
+                logger.exception(f"An error occoured while closing previous connected {username} client", exc_info=ex)
 
         public_key: ec.EllipticCurvePublicKey = serialization.load_der_public_key(handshake_init.public_key) # type: ignore
 

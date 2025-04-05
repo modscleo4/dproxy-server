@@ -53,15 +53,15 @@ class PEMResponse(PlainTextResponse):
 
 class JWTBearer(HTTPBearer):
     async def __call__(self, request: CustomRequest) -> HTTPAuthorizationCredentials | None:
-        authCredentials = await super().__call__(request)
-        if authCredentials:
-            token = authCredentials.credentials
+        auth_credentials = await super().__call__(request)
+        if auth_credentials:
+            token = auth_credentials.credentials
             if not (user := jwt.decode(token, algorithms=["ES384"], key=request.app.private_key.public_key())):
                 raise HTTPException(401, "Invalid token")
 
             request.scope['user'] = user
 
-        return authCredentials
+        return auth_credentials
 
 
 class ProxyHTTPSProtocol(asyncio.Protocol):
