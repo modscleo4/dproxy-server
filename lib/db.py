@@ -14,6 +14,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from os import path, makedirs
 import sqlite3
 
 
@@ -49,6 +50,9 @@ def connect_db() -> sqlite3.Connection:
 
 def init_db(database_path: str) -> None:
     global DATABASE_PATH
+
+    if not path.exists(database_path):
+        makedirs(database_path)
 
     DATABASE_PATH = database_path
     with connect_db() as db:

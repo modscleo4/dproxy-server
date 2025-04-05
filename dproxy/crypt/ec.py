@@ -25,10 +25,6 @@ def generate_private_key() -> ec.EllipticCurvePrivateKey:
 
 
 def read_private_key(key_path: str) -> ec.EllipticCurvePrivateKey:
-    if not os.path.exists(f"{key_path}/private.pem"):
-        private_key = generate_private_key()
-        write_key_pair(key_path, private_key)
-
     with open(f"{key_path}/private.pem", "rb") as f:
         return serialization.load_pem_private_key(f.read(), None) # type: ignore
 
