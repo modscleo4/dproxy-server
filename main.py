@@ -226,6 +226,8 @@ async def main() -> None:
             while http_future.running() or tcp_future.running():
                 if event.is_set():
                     http_server.should_exit = True
+                    dproxy_server.server_close()
+                    dproxy_server.shutdown()
                     break
 
                 await asyncio.sleep(1)

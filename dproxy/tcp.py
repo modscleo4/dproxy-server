@@ -183,21 +183,22 @@ class DProxyTCPServer(ThreadingTCPServer):
         logger.info(f"TCP listening on {self.server_address[0]}:{self.server_address[1]}")
 
     @override
+    def server_close(self) -> None:
+        super().server_close()
+        logger.info("Closing TCP server...")
+        try:
+            for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
+                sock.close()
+
+            DProxyConnectionWrapper.clients.clear()
+            DProxyConnectionWrapper.last_connection_id.clear()
+        except Exception as ex:
+            logger.exception("An error occurred while closing the TCP server", exc_info=ex)
+
+    @override
     def service_actions(self) -> None:
         try:
             if self.stop_event.is_set():
-                logger.info("Closing TCP server...")
-                try:
-                    for username, (sock, _, _, _) in DProxyConnectionWrapper.clients.items():
-                        sock.close()
-
-                    DProxyConnectionWrapper.clients.clear()
-                    DProxyConnectionWrapper.last_connection_id.clear()
-                except Exception as ex:
-                    logger.exception("An error occurred while closing the TCP server", exc_info=ex)
-
-                self.server_close()
-
                 return
 
             self.ticks += 1
