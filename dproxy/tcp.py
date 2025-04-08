@@ -426,6 +426,9 @@ class TCPHandler(BaseRequestHandler):
             except ValueError as ex:
                 logger.warning(f"Invalid packet received from {self.username}, ignoring...", exc_info=ex)
                 continue
+            except BrokenPipeError as ex:
+                logger.debug(f"Connection closed by the client: {self.username}", exc_info=ex)
+                break
             except SelectError as ex:
                 logger.exception("An error occurred while selecting the socket.", exc_info=ex)
                 break
