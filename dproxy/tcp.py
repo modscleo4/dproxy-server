@@ -266,6 +266,8 @@ class TCPHandler(BaseRequestHandler):
             # Add the connection to the server connections map
             DProxyConnectionWrapper.clients[self.username] = (self.request, self.cek, {}, {})
             self.run_loop()
+        except ValueError as ex:
+            logger.debug(f"Invalid packet received from {self.client_address}, ignoring...", exc_info=ex)
         except Exception as ex:
             logger.exception("An unexpected error occurred while handling the connection", exc_info=ex)
 
