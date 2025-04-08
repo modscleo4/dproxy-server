@@ -35,7 +35,7 @@ from dproxy.crypt.ec import read_private_key
 
 from lib.db import connect_db, init_db, get_client, get_public_key
 from lib.http import router
-from lib.log import configure_logging
+from lib.log import DisableLogFilter, configure_logging
 from lib.utils import CustomFastAPI, ProxyHTTPSProtocol, mount_http_str
 
 
@@ -123,11 +123,11 @@ async def proxy_handler(request: Request, call_next):
         username, password = b64decode(credentials).decode('utf-8').split(":", 1)
         with connect_db() as db:
             if not (client := get_client(db, username)) or not client.enabled or password != app.http_proxy_password:
-                logger.info(f"Client {username} is not registered or the password {password} is invalid.")
+                logger.debug(f"Client {username} is not registered or the password {password} is invalid.")
                 return Response(status_code=407, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
 
         if username not in DProxyConnectionWrapper.clients:
-            logger.info(f"Client {username} is not connected.")
+            logger.debug(f"Client {username} is not connected.")
             return Response(status_code=503, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
 
         if request.method == "CONNECT":
@@ -216,6 +216,9 @@ async def main() -> None:
     http_server = uvicorn.Server(uvicorn.Config(app, host=args.address, port=args.http_port))
     dproxy_server = DProxyTCPServer((args.address, args.tcp_port), TCPHandler, event, handshake_hook, app.private_key)
     init_db(args.db_path)
+
+    uvicorn_access_logger = logging.getLogger("uvicorn.access")
+    uvicorn_access_logger.addFilter(DisableLogFilter())
 
     with ThreadPoolExecutor() as executor:
         http_future = executor.submit(http_server.run)

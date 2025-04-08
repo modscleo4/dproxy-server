@@ -20,3 +20,11 @@ def configure_logging(debug: bool) -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         level=logging.INFO if not debug else logging.DEBUG,
     )
+
+
+class DisableLogFilter(logging.Filter):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return False
