@@ -9,14 +9,14 @@ dependencies = [
 ]
 requires-python = ">=3.12"
 authors = [
-    {name = "Dhiego Cassiano Fogaça Barbosa", email = "modscleo4@outlook.com"},
+    { name = "Dhiego Cassiano Fogaça Barbosa", email = "modscleo4@outlook.com" },
 ]
 maintainers = [
-    {name = "Dhiego Cassiano Fogaça Barbosa", email = "modscleo4@outlook.com"},
+    { name = "Dhiego Cassiano Fogaça Barbosa", email = "modscleo4@outlook.com" },
 ]
 description = "DProxy - Distributed Proxy Server"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 keywords = ["dproxy", "server", "proxy"]
 
 [project.urls]
