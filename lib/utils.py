@@ -24,6 +24,7 @@ from fastapi.security import HTTPBearer
 from fastapi.security.http import HTTPAuthorizationCredentials
 import jwt
 from starlette.types import Receive, Send
+from uvicorn.protocols.http.h11_impl import RequestResponseCycle
 
 from dproxy.tcp import DProxyConnectionWrapper
 
@@ -65,17 +66,23 @@ class JWTBearer(HTTPBearer):
 
 
 class ProxyHTTPSProtocol(asyncio.Protocol):
-    def __init__(self, logger: Logger, conn: DProxyConnectionWrapper, transport: asyncio.Transport):
+    def __init__(self, logger: Logger, conn: DProxyConnectionWrapper, cycle: RequestResponseCycle):
         self.logger = logger
         self.conn = conn
-        self.transport = transport
+        self.cycle = cycle
 
     def data_received(self, data: bytes):
         # Send the request to the client
         self.logger.debug(f"Sending data to the client: {len(data)} bytes.")
-        self.conn.write(data)
+        try:
+            self.conn.write(data)
+        except:
+            pass
 
     def connection_lost(self, exc):
+        if self.cycle and not self.cycle.response_complete:
+            self.cycle.disconnected = True
+
         try:
             self.conn.close()
         except:
@@ -84,8 +91,8 @@ class ProxyHTTPSProtocol(asyncio.Protocol):
 
 def mount_http_str(request: Request, url: ParseResult) -> str:
     http_str = f"{request.method} {url.path if url.path else '/'}{'?' + request.url.query if request.url.query else ''} HTTP/{request.scope['http_version']}\r\n"
-    headers = dict(request.headers).copy()
-    headers.update({ "Connection": "close" }) # Always close the connection to avoid problems with the proxy client
+    headers = request.headers.mutablecopy()
+    headers["Connection"] = "close"  # Always close the connection to avoid problems with the proxy client
     for header, value in headers.items():
         if header.lower() in ["proxy-authorization", "proxy-connection"]:
             continue

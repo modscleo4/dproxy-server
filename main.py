@@ -57,11 +57,15 @@ async def _https_return(_scope: dict, _receive: Receive, _send: Send):
     cycle.transport.write(f"HTTP/{_scope['http_version']} 200 Connection established\r\n\r\n".encode('iso-8859-1'))
     h11_proto: H11Protocol = cycle.transport.get_protocol()  # type: ignore
     h11_proto.connections.discard(h11_proto)
-    cycle.transport.set_protocol(ProxyHTTPSProtocol(logger, conn, cycle.transport))
+    cycle.transport.set_protocol(ProxyHTTPSProtocol(logger, conn, cycle))
 
     await _receive()
     while conn.is_alive():
         try:
+            if cycle.disconnected:
+                conn.close()
+                return
+
             while data := await conn.read(0.01):
                 logger.debug(f"Received data from packet: {len(data)}.")
                 cycle.transport.write(data)
@@ -84,20 +88,29 @@ async def _http_return(_scope: dict, _receive: Receive, _send: Send):
 
     try:
         await _receive()
-        while data := await conn.read(30):
+        while data := await conn.read(600):
             logger.debug(f"Received data from packet: {len(data)}.")
-            if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+            if cycle.conn.our_state == h11.ERROR:
                 break
 
-            cycle.response_started = True
-            status_line, _ = data.split(b"\r\n", 1)
-            version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
-            cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
+            if cycle.disconnected:
+                conn.close()
+                return
+
+            if not cycle.response_started:
+                cycle.response_started = True
+                status_line, data = data.split(b"\r\n", 1)
+                version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
+                cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
 
             cycle.transport.write(data)
     except TimeoutError:
         logger.debug(f"Connection {conn.connection_id} timed out.")
+    except ValueError:
+        logger.debug(f"Client {conn.username} disconnected.")
+        pass
     except ConnectionError:
+        logger.debug(f"Connection {conn.connection_id} closed.")
         pass
 
     if conn.is_alive():
@@ -135,7 +148,7 @@ async def proxy_handler(request: Request, call_next):
             url = urlparse('https://' + request.scope['path'])
             if url.hostname:
                 try:
-                    conn = DProxyConnectionWrapper.connect_to(username, url.hostname, url.port or 80, 30)
+                    conn = await DProxyConnectionWrapper.connect_to(username, url.hostname, url.port or 80, 30)
                 except BrokenPipeError:
                     return Response(status_code=503, headers={"Proxy-Authenticate": "Basic realm=\"dproxy\""})
                 except TimeoutError:
@@ -155,7 +168,7 @@ async def proxy_handler(request: Request, call_next):
             http_req = mount_http_str(request, url).encode('utf-8')
 
             try:
-                conn = DProxyConnectionWrapper.connect_to(username, url.hostname, url.port or 80, 30)
+                conn = await DProxyConnectionWrapper.connect_to(username, url.hostname, url.port or 80, 30)
 
                 conn.write(http_req)
                 async for chunk in request.stream():

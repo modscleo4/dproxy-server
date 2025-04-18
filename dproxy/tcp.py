@@ -55,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 class DProxyConnectionWrapper:
-    clients: dict[str, tuple[socket, bytes, dict[int, tuple[Semaphore, Queue[bytes]]], dict[int, Event]]] = {}
+    clients: dict[str, tuple[socket, bytes, dict[int, tuple[Semaphore, Queue[bytes]]], dict[int, Semaphore]]] = {}
     last_connection_id: dict[str, int] = {}
 
     def __init__(self, username: str, sock: socket, connection_id: int) -> None:
@@ -74,12 +74,17 @@ class DProxyConnectionWrapper:
         if self.connection_id not in recv:
             raise ValueError("Connection not established.")
 
-        await wait_for(recv[self.connection_id][0].acquire(), timeout)
+        sem, queue = recv[self.connection_id]
 
+        await wait_for(sem.acquire(), timeout)
         if not self.is_alive():
             raise ConnectionError("Connection closed.")
 
-        return recv[self.connection_id][1].get_nowait()
+        data = b''
+        while not queue.empty():
+            data += queue.get_nowait()
+
+        return data
 
     def write(self, data: bytes) -> None:
         if self.username not in DProxyConnectionWrapper.clients:
@@ -106,13 +111,12 @@ class DProxyConnectionWrapper:
             raise ValueError("DProxyClient already disconnected.")
 
         sock, _, recv, _ = DProxyConnectionWrapper.clients[self.username]
-        if self.connection_id not in recv:
-            raise ValueError("Connection not established.")
-
-        select([], [sock], [])
-        sock.send(DProxyDisconnect(1, DProxyPacketType.DISCONNECT, 4, DProxyError.NO_ERROR, self.connection_id).to_bytes())
-        recv[self.connection_id][0].release()
-        del recv[self.connection_id]
+        try:
+            select([], [sock], [])
+            sock.send(DProxyDisconnect(1, DProxyPacketType.DISCONNECT, 4, DProxyError.NO_ERROR, self.connection_id).to_bytes())
+            del recv[self.connection_id]
+        except Exception as ex:
+            logger.exception("An error occurred while closing the connection", exc_info=ex)
 
     def __enter__(self):
         return self
@@ -121,7 +125,7 @@ class DProxyConnectionWrapper:
         try:
             self.close()
         except Exception as ex:
-            logger.exception("An error occurred while closing the connection", exc_info=ex)
+            logger.exception("An error occurred while cleaning up the connection", exc_info=ex)
 
     @classmethod
     def is_connected(cls, username: str, connection_id: int) -> bool:
@@ -131,18 +135,18 @@ class DProxyConnectionWrapper:
         return connection_id in cls.clients[username][2]
 
     @classmethod
-    def connect_to(cls, username: str, host: str, port: int, timeout: float | None = None) -> Self:
+    async def connect_to(cls, username: str, host: str, port: int, timeout: float | None = None) -> Self:
         if username not in cls.clients:
             raise ValueError("DProxyClient not connected.")
 
-        sock, _, _, conn_event = cls.clients[username]
+        sock, _, recv, conn_event = cls.clients[username]
         connection_id = cls.get_next_connection_id(username)
+        conn_event[connection_id] = Semaphore(0)
         select([], [sock], [])
         sock.send(DProxyConnect(1, DProxyPacketType.CONNECT, 4 + 2 + len(host) + 2, DProxyError.NO_ERROR, connection_id, host, port).to_bytes())
 
-        conn_event[connection_id] = Event()
-
-        if not conn_event[connection_id].wait(timeout):
+        await wait_for(conn_event[connection_id].acquire(), timeout)
+        if not connection_id in recv:
             raise TimeoutError("Timeout while waiting for connection.")
 
         del conn_event[connection_id]
@@ -172,10 +176,9 @@ class DProxyTCPServer(ThreadingTCPServer):
         event: Event,
         handshake_hook: Callable[[DProxyHandshakeInit], str | None],
         private_key: ec.EllipticCurvePrivateKey,
-        bind_and_activate: bool = True,
-        *args, **kwargs
+        bind_and_activate: bool = True
     ):
-        super().__init__(server_address, RequestHandlerClass, bind_and_activate, *args, **kwargs)
+        super().__init__(server_address, RequestHandlerClass, bind_and_activate)
         self.stop_event = event
         self.handshake_hook = handshake_hook
         self.private_key = private_key
@@ -388,14 +391,13 @@ class TCPHandler(BaseRequestHandler):
                     if not remaining_data:
                         break
 
-                    recv = DProxyConnectionWrapper.clients[self.username][2]
-                    conn_event = DProxyConnectionWrapper.clients[self.username][3]
+                    _, _, recv, conn_event = DProxyConnectionWrapper.clients[self.username]
 
                     if header.type == DProxyPacketType.CONNECTED: # New connection established
                         packet = DProxyConnected.from_bytes(data + remaining_data)
                         logger.debug(f"New connection established, connection_id: {packet.connection_id}")
                         recv[packet.connection_id] = (Semaphore(0), Queue())
-                        conn_event[packet.connection_id].set()
+                        conn_event[packet.connection_id].release()
                     elif header.type == DProxyPacketType.DISCONNECTED: # Connection closed
                         packet = DProxyDisconnected.from_bytes(data + remaining_data)
                         logger.debug(f"Connection closed, connection_id: {packet.connection_id}")
@@ -442,8 +444,10 @@ class TCPHandler(BaseRequestHandler):
             logger.debug(f"Connection from {self.username} closed.")
             _, _, recv, conn_event = DProxyConnectionWrapper.clients[self.username]
             del DProxyConnectionWrapper.clients[self.username]
-
             for _, (sem, _) in recv.items():
+                sem.release()
+
+            for _, sem in conn_event.items():
                 sem.release()
 
         return super().finish()
