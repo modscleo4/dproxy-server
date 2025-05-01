@@ -67,7 +67,7 @@ async def _https_return(_scope: dict, _receive: Receive, _send: Send):
                 return
 
             while data := await conn.read(0.01):
-                logger.debug(f"Received data from packet: {len(data)}.")
+                logger.debug(f"Received HTTPS data from packet: {len(data)}.")
                 cycle.transport.write(data)
         except TimeoutError:
             pass
@@ -89,7 +89,7 @@ async def _http_return(_scope: dict, _receive: Receive, _send: Send):
     try:
         await _receive()
         while data := await conn.read(600):
-            logger.debug(f"Received data from packet: {len(data)}.")
+            logger.debug(f"Received HTTP data from packet: {len(data)}.")
             if cycle.conn.our_state == h11.ERROR:
                 break
 
@@ -108,10 +108,8 @@ async def _http_return(_scope: dict, _receive: Receive, _send: Send):
         logger.debug(f"Connection {conn.connection_id} timed out.")
     except ValueError:
         logger.debug(f"Client {conn.username} disconnected.")
-        pass
     except ConnectionError:
         logger.debug(f"Connection {conn.connection_id} closed.")
-        pass
 
     if conn.is_alive():
         conn.close()

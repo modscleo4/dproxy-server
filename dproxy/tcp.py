@@ -80,11 +80,7 @@ class DProxyConnectionWrapper:
         if not self.is_alive():
             raise ConnectionError("Connection closed.")
 
-        data = b''
-        while not queue.empty():
-            data += queue.get_nowait()
-
-        return data
+        return queue.get_nowait()
 
     def write(self, data: bytes) -> None:
         if self.username not in DProxyConnectionWrapper.clients:
@@ -100,6 +96,9 @@ class DProxyConnectionWrapper:
                     select([], [sock], [])
                     sock.send(DProxyData(1, DProxyPacketType.DATA, len(iv) + 2 + len(ciphertext) + len(auth_tag), DProxyError.NO_ERROR, self.connection_id, iv, ciphertext, auth_tag).to_bytes())
                     break
+                except SelectError as ex:
+                    logger.exception("An error occurred while trying to send data to the client.", exc_info=ex)
+                    raise ex
                 except Exception as ex:
                     if attempt == 4:
                         raise ex
@@ -155,9 +154,6 @@ class DProxyConnectionWrapper:
 
     @classmethod
     def get_next_connection_id(cls, username: str) -> int:
-        if username not in cls.last_connection_id:
-            cls.last_connection_id[username] = 0
-
         cls.last_connection_id[username] += 1
         return cls.last_connection_id[username]
 
@@ -182,6 +178,7 @@ class DProxyTCPServer(ThreadingTCPServer):
         self.stop_event = event
         self.handshake_hook = handshake_hook
         self.private_key = private_key
+        self.allow_reuse_port = True
 
         logger.info(f"TCP listening on {self.server_address[0]}:{self.server_address[1]}")
 
@@ -268,6 +265,7 @@ class TCPHandler(BaseRequestHandler):
 
             # Add the connection to the server connections map
             DProxyConnectionWrapper.clients[self.username] = (self.request, self.cek, {}, {})
+            DProxyConnectionWrapper.last_connection_id[self.username] = 0
             self.run_loop()
         except ValueError as ex:
             logger.debug(f"Invalid packet received from {self.client_address}, ignoring...", exc_info=ex)

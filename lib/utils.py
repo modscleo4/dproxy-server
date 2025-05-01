@@ -73,7 +73,7 @@ class ProxyHTTPSProtocol(asyncio.Protocol):
 
     def data_received(self, data: bytes):
         # Send the request to the client
-        self.logger.debug(f"Sending data to the client: {len(data)} bytes.")
+        self.logger.debug(f"Sending HTTPS data to the client: {len(data)} bytes.")
         try:
             self.conn.write(data)
         except:
