@@ -32,11 +32,12 @@ from uvicorn.protocols.http.h11_impl import H11Protocol, RequestResponseCycle
 from dproxy import DProxyHandshakeInit
 from dproxy.tcp import DProxyConnectionWrapper, DProxyTCPServer, TCPHandler
 from dproxy.crypt.ec import read_private_key
+from dproxy.mixins import CustomFastAPI, ProxyHTTPSProtocol
 
 from lib.db import connect_db, init_db, get_client, get_public_key
-from lib.http import router
+from dproxy.http import router
 from lib.log import DisableLogFilter, configure_logging
-from lib.utils import CustomFastAPI, ProxyHTTPSProtocol, mount_http_str
+from lib.utils import mount_http_str
 
 
 logger = logging.getLogger(__name__)

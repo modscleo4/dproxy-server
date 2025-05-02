@@ -51,7 +51,7 @@ from dproxy import (
     DProxyErrorPacket,
     recv_or_none
 )
-
+from lib.utils import chunk_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ class DProxyConnectionWrapper:
             raise ValueError("DProxyClient not connected.")
 
         sock, cek, _, _ = DProxyConnectionWrapper.clients[self.username]
-        for chunk in [data[i:i + 32768] for i in range(0, len(data), 32768)]:
+        for chunk in chunk_bytes(data, 32768):
             iv = os.urandom(12)
             ciphertext, auth_tag = aes_gcm_encrypt(cek, iv, chunk)
 

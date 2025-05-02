@@ -17,9 +17,9 @@ from cryptography.hazmat.primitives import serialization
 from fastapi import Depends, HTTPException, APIRouter
 from fastapi.responses import Response
 
-from lib.db import add_client, add_public_key, connect_db, get_client, get_public_key
-from lib.utils import CustomRequest, JWTBearer, PEMResponse
+from dproxy.mixins import CustomRequest, JWTBearer, PEMResponse
 
+from lib.db import add_client, add_public_key, connect_db, get_client, get_public_key
 
 router = APIRouter()
 
@@ -39,7 +39,7 @@ async def register_client_public_key(request: CustomRequest):
         raise HTTPException(415, "Invalid Content-Type")
 
     username = request.user['sub']
-    public_key: ec.EllipticCurvePublicKey = serialization.load_pem_public_key(await request.body()) # type: ignore
+    public_key: ec.EllipticCurvePublicKey = serialization.load_pem_public_key(await request.body())  # type: ignore
     der_public_key = public_key.public_bytes(
         serialization.Encoding.DER,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
