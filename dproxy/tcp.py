@@ -25,10 +25,12 @@ from time import time
 from threading import Event
 from typing import Any, override, Self
 
+import h11
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives import hashes
+from uvicorn.protocols.http.h11_impl import RequestResponseCycle
 
 from dproxy.crypt.aesgcm import aes_gcm_encrypt, aes_gcm_decrypt
 from dproxy import (
@@ -55,7 +57,7 @@ logger = logging.getLogger(__name__)
 
 
 class DProxyConnectionWrapper:
-    clients: dict[str, tuple[socket, bytes, dict[int, tuple[Semaphore, Queue[bytes]]], dict[int, Semaphore]]] = {}
+    clients: dict[str, tuple[socket, bytes, dict[int, tuple[Semaphore, Queue[bytes], RequestResponseCycle | None]], dict[int, Semaphore]]] = {}
     last_connection_id: dict[str, int] = {}
 
     def __init__(self, username: str, sock: socket, connection_id: int) -> None:
@@ -74,7 +76,7 @@ class DProxyConnectionWrapper:
         if self.connection_id not in recv:
             raise ValueError("Connection not established.")
 
-        sem, queue = recv[self.connection_id]
+        sem, queue, _ = recv[self.connection_id]
 
         await wait_for(sem.acquire(), timeout)
         if not self.is_alive():
@@ -117,6 +119,17 @@ class DProxyConnectionWrapper:
         except Exception as ex:
             logger.exception("An error occurred while closing the connection", exc_info=ex)
 
+    def set_cycle(self, cycle: RequestResponseCycle) -> None:
+        if self.username not in DProxyConnectionWrapper.clients:
+            raise ValueError("DProxyClient not connected.")
+
+        _, _, recv, _ = DProxyConnectionWrapper.clients[self.username]
+        if self.connection_id not in recv:
+            raise ValueError("Connection not established.")
+
+        sem, queue, _ = recv[self.connection_id]
+        recv[self.connection_id] = (sem, queue, cycle)
+
     def __enter__(self):
         return self
 
@@ -145,7 +158,7 @@ class DProxyConnectionWrapper:
         sock.send(DProxyConnect(1, DProxyPacketType.CONNECT, 4 + 2 + len(host) + 2, DProxyError.NO_ERROR, connection_id, host, port).to_bytes())
 
         await wait_for(conn_event[connection_id].acquire(), timeout)
-        if not connection_id in recv:
+        if connection_id not in recv:
             raise TimeoutError("Timeout while waiting for connection.")
 
         del conn_event[connection_id]
@@ -370,7 +383,7 @@ class TCPHandler(BaseRequestHandler):
             if self.server.stop_event.is_set():
                 break
 
-            if not self.username in DProxyConnectionWrapper.clients:
+            if self.username not in DProxyConnectionWrapper.clients:
                 break
 
             if self.request.fileno() == -1:
@@ -394,7 +407,7 @@ class TCPHandler(BaseRequestHandler):
                     if header.type == DProxyPacketType.CONNECTED: # New connection established
                         packet = DProxyConnected.from_bytes(data + remaining_data)
                         logger.debug(f"New connection established, connection_id: {packet.connection_id}")
-                        recv[packet.connection_id] = (Semaphore(0), Queue())
+                        recv[packet.connection_id] = (Semaphore(0), Queue(), None)
                         conn_event[packet.connection_id].release()
                     elif header.type == DProxyPacketType.DISCONNECTED: # Connection closed
                         packet = DProxyDisconnected.from_bytes(data + remaining_data)
@@ -407,10 +420,19 @@ class TCPHandler(BaseRequestHandler):
                         packet = DProxyData.from_bytes(data + remaining_data)
                         # Decrypt the data
                         plaintext = aes_gcm_decrypt(self.cek, packet.iv, packet.ciphertext, packet.auth_tag)
-                        # logger.debug(f"Data received, connection_id: {packet.connection_id}, data: {plaintext}")
+                        logger.debug(f"Data received, connection_id: {packet.connection_id}, {len(plaintext)} bytes.")
                         if packet.connection_id in recv:
-                            recv[packet.connection_id][1].put_nowait(plaintext)
-                            recv[packet.connection_id][0].release()
+                            sem, queue, cycle = recv[packet.connection_id]
+                            queue.put_nowait(plaintext)
+                            sem.release()
+                            if cycle:
+                                if not cycle.response_started:
+                                    cycle.response_started = True
+                                    status_line, plaintext = plaintext.split(b"\r\n", 1)
+                                    version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
+                                    cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
+
+                                cycle.transport.write(plaintext)
                     elif header.type == DProxyPacketType.HEARTBEAT:
                         packet = DProxyHeartbeatResponse(1, DProxyPacketType.HEARTBEAT_RESPONSE, 8, DProxyError.NO_ERROR, round(time() * 1000))
                         self.send_packet(packet)
@@ -442,7 +464,7 @@ class TCPHandler(BaseRequestHandler):
             logger.debug(f"Connection from {self.username} closed.")
             _, _, recv, conn_event = DProxyConnectionWrapper.clients[self.username]
             del DProxyConnectionWrapper.clients[self.username]
-            for _, (sem, _) in recv.items():
+            for _, (sem, _, _) in recv.items():
                 sem.release()
 
             for _, sem in conn_event.items():

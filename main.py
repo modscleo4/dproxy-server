@@ -58,25 +58,15 @@ async def _https_return(_scope: dict, _receive: Receive, _send: Send):
     h11_proto: H11Protocol = cycle.transport.get_protocol()  # type: ignore
     h11_proto.connections.discard(h11_proto)
     cycle.transport.set_protocol(ProxyHTTPSProtocol(logger, conn, cycle))
+    conn.set_cycle(cycle)
 
     await _receive()
     while conn.is_alive():
-        try:
-            if cycle.disconnected:
-                conn.close()
-                return
+        if cycle.disconnected:
+            conn.close()
+            return
 
-            while data := await conn.read(0.01):
-                logger.debug(f"Received HTTPS data from packet: {len(data)}.")
-                cycle.transport.write(data)
-        except TimeoutError:
-            pass
-        except ValueError:
-            logger.debug(f"Client {conn.username} disconnected.")
-            break
-        except ConnectionError:
-            logger.debug(f"Connection {conn.connection_id} closed.")
-            break
+        await asyncio.sleep(1)
 
     cycle.response_complete = True
     cycle.transport.close()
@@ -85,31 +75,21 @@ async def _https_return(_scope: dict, _receive: Receive, _send: Send):
 async def _http_return(_scope: dict, _receive: Receive, _send: Send):
     conn: DProxyConnectionWrapper = _scope['conn']
     cycle: RequestResponseCycle = _scope['RequestResponseCycle']
+    if cycle.response_started or cycle.conn.our_state == h11.ERROR:
+        return
 
-    try:
-        await _receive()
-        while data := await conn.read(600):
-            logger.debug(f"Received HTTP data from packet: {len(data)}.")
-            if cycle.conn.our_state == h11.ERROR:
-                break
+    conn.set_cycle(cycle)
 
-            if cycle.disconnected:
-                conn.close()
-                return
+    await _receive()
+    while conn.is_alive():
+        if cycle.conn.our_state == h11.ERROR:
+            break
 
-            if not cycle.response_started:
-                cycle.response_started = True
-                status_line, data = data.split(b"\r\n", 1)
-                version, status_code, reason = status_line.decode('iso-8859-1').split(" ", 2)
-                cycle.conn.send(h11.Response(status_code=int(status_code), headers=[], reason=reason, http_version=version.split("/", 1)[1]))
+        if cycle.disconnected:
+            conn.close()
+            return
 
-            cycle.transport.write(data)
-    except TimeoutError:
-        logger.debug(f"Connection {conn.connection_id} timed out.")
-    except ValueError:
-        logger.debug(f"Client {conn.username} disconnected.")
-    except ConnectionError:
-        logger.debug(f"Connection {conn.connection_id} closed.")
+        await asyncio.sleep(1)
 
     if conn.is_alive():
         conn.close()
